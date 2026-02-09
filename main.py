@@ -387,7 +387,6 @@ async def get_stage_details(stage_id: str):
 # ==============================================================================
 # EQUIPMENT
 # ==============================================================================
-
 @app.get("/api/equipment/{equip_id}")
 async def get_equipment(equip_id: str):
     equip = next((e for e in PLANT_DATA["equipment"] if e["equip_id"] == equip_id), None)
@@ -397,14 +396,59 @@ async def get_equipment(equip_id: str):
     # Get current readings
     readings = equip["readings"]
     
-    # Calculate derived metrics
+    # Get values for formula calculations
+    clogging_idx = readings.get("clogging_index", 0)
+    wear_pct = readings.get("wear_pct", 0)
+    erosion_pct = readings.get("erosion_pct", 0)
+    refractory_mm = readings.get("refractory_mm", 150)
+    temp = readings.get("steel_temp_c", 1540)
+    operating_hours = readings.get("operating_hours", 0)
+    heats_count = readings.get("heats_count", 0)
+    failure_prob = equip["failure_probability"]
+    health_score = equip["health_score"]
+    
+    # Calculate derived metrics with ACTUAL formulas
+    thermal_stress = round(abs(temp - 1540) / 25 * 100, 1)
+    operational_eff = round((1 - failure_prob) * 100, 1)
+    
+    # Wear calculation (from data_generator.py calculate_wear_percentage)
+    time_wear = operating_hours * 0.05
+    temp_excess = max(0, temp - 1540)
+    thermal_wear = operating_hours * temp_excess * 0.001
+    cyclic_wear = heats_count * 0.02
+    total_wear = time_wear + thermal_wear + cyclic_wear
+    
+    # Health calculation components (from data_generator.py calculate_health_score)
+    refractory_life = (refractory_mm - 50) / (150 - 50) if refractory_mm > 50 else 0
+    refractory_score = max(0, min(100, refractory_life * 100))
+    usage_ratio = heats_count / 250
+    usage_score = max(0, min(100, (1 - usage_ratio) * 100))
+    temp_deviation = abs(temp - 1540)
+    temp_stress_ratio = temp_deviation / 25
+    thermal_score = max(0, min(100, (1 - temp_stress_ratio) * 100))
+    
     derived_metrics = {
-        "clogging_risk": "high" if readings.get("clogging_index", 0) > 65 else "medium" if readings.get("clogging_index", 0) > 40 else "low",
-        "wear_status": "critical" if readings.get("wear_pct", 0) > 75 else "elevated" if readings.get("wear_pct", 0) > 50 else "normal",
-        "refractory_condition": "needs_replacement" if readings.get("refractory_mm", 150) < 60 else "monitor" if readings.get("refractory_mm", 150) < 90 else "good",
-        "thermal_stress": round(abs(readings.get("steel_temp_c", 1540) - 1540) / 25 * 100, 1),
-        "operational_efficiency": round((1 - equip["failure_probability"]) * 100, 1),
-        "maintenance_urgency": "immediate" if equip["failure_probability"] > 0.7 else "soon" if equip["failure_probability"] > 0.5 else "planned"
+        "clogging_risk": "high" if clogging_idx > 65 else "medium" if clogging_idx > 40 else "low",
+        "wear_status": "critical" if wear_pct > 75 else "elevated" if wear_pct > 50 else "normal",
+        "refractory_condition": "needs_replacement" if refractory_mm < 60 else "monitor" if refractory_mm < 90 else "good",
+        "thermal_stress": thermal_stress,
+        "operational_efficiency": operational_eff,
+        "maintenance_urgency": "immediate" if failure_prob > 0.7 else "soon" if failure_prob > 0.5 else "planned",
+        "formulas": {
+            "clogging_index": f"gate_clogging × 0.40 + pressure_clogging × 0.35 + flow_clogging × 0.25 = {clogging_idx:.1f}",
+            
+            "wear_pct": f"(time_wear + thermal_wear + cyclic_wear) / 100 × 100 = ({time_wear:.2f} + {thermal_wear:.2f} + {cyclic_wear:.2f}) / 100 × 100 = {wear_pct:.1f}%",
+            
+            "erosion_pct": f"wear_pct × 0.8 = {wear_pct:.1f} × 0.8 = {erosion_pct:.1f}%",
+            
+            "health_score": f"refractory_score × 0.35 + usage_score × 0.25 + thermal_score × 0.25 + anomaly_score × 0.15 = {refractory_score:.1f} × 0.35 + {usage_score:.1f} × 0.25 + {thermal_score:.1f} × 0.25 + ... = {health_score}",
+            
+            "thermal_stress": f"(|steel_temp_c - 1540| / 25) × 100 = (|{temp:.1f} - 1540| / 25) × 100 = ({temp_deviation:.1f} / 25) × 100 = {thermal_stress}%",
+            
+            "operational_efficiency": f"(1 - failure_probability) × 100 = (1 - {failure_prob:.3f}) × 100 = {operational_eff:.1f}%",
+            
+            "refractory_life": f"(current_thickness - min_thickness) / (initial_thickness - min_thickness) × 100 = ({refractory_mm:.1f} - 50) / (150 - 50) × 100 = {refractory_score:.1f}%"
+        }
     }
     
     return {
@@ -445,7 +489,7 @@ async def get_equipment(equip_id: str):
             if s_data["equipment_id"] == equip_id
         ]
     }
-    
+
 @app.get("/api/equipment/{equip_id}/explanation")
 async def get_explanation(equip_id: str, use_ai: bool = True):
     equip = next((e for e in PLANT_DATA["equipment"] if e["equip_id"] == equip_id), None)
