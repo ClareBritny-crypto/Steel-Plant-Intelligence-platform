@@ -291,12 +291,19 @@ async def get_stages():
     res = []
     for s in STAGES:
         stage_equip = [e for e in equipment if e["stage_id"] == s["id"]]
+        
+        # Calculate average health for this stage
+        avg_health = 0
+        if stage_equip:
+            avg_health = sum(e["health_score"] for e in stage_equip) / len(stage_equip)
+        
         res.append({
             "stage_id": s["id"],
             "name": s["name"],
             "order": s["order"],
             "equipment_count": len(stage_equip),
-            "high_risk_count": len([e for e in stage_equip if e["risk_category"] == "high"])
+            "high_risk_count": len([e for e in stage_equip if e["risk_category"] == "high"]),
+            "avg_health_score": round(avg_health, 1)
         })
     return {"stages": sorted(res, key=lambda x: x["order"])}
 
@@ -845,14 +852,50 @@ async def get_priorities_summary():
 @app.get("/api/ai/plant-summary")
 async def get_ai_summary():
     equipment = PLANT_DATA["equipment"]
+    high_risk_count = len([e for e in equipment if e["risk_category"] == "high"])
+    critical_count = len([e for e in equipment if e["failure_probability"] > 0.8])
     avg_health = sum(e["health_score"] for e in equipment) / len(equipment)
-    high_risk = len([e for e in equipment if e["risk_category"] == "high"])
     
-    status = "CRITICAL" if high_risk > 3 else "STABLE"
+    # Find worst stage
+    stage_stats = {}
+    for stage in STAGES:
+        stage_equip = [e for e in equipment if e["stage_id"] == stage["id"]]
+        if stage_equip:
+            stage_high_risk = len([e for e in stage_equip if e["risk_category"] == "high"])
+            stage_avg_prob = sum(e["failure_probability"] for e in stage_equip) / len(stage_equip)
+            stage_stats[stage["id"]] = {
+                "stage_id": stage["id"],
+                "stage_name": stage["name"],
+                "high_risk_count": stage_high_risk,
+                "avg_failure_probability": round(stage_avg_prob, 3)
+            }
+    
+    worst_stage = max(stage_stats.values(), key=lambda x: x["avg_failure_probability"]) if stage_stats else None
+    
+    # Build comprehensive summary
+    if critical_count > 0:
+        summary = f"🚨 CRITICAL ALERT: {critical_count} equipment units in CRITICAL state (>80% failure risk). "
+    elif high_risk_count > 3:
+        summary = f"⚠️ HIGH RISK: {high_risk_count} equipment units require immediate attention. "
+    else:
+        summary = f"✅ STABLE: Operations within acceptable parameters. "
+    
+    summary += f"Plant average health: {avg_health:.1f}%. "
+    
+    if worst_stage:
+        summary += f"Most concerning stage: {worst_stage['stage_name']} with {worst_stage['high_risk_count']} high-risk units and {worst_stage['avg_failure_probability']:.1%} average failure probability. "
+    
+    if critical_count > 0:
+        summary += "Immediate maintenance intervention required."
+    elif high_risk_count > 0:
+        summary += "Schedule maintenance within next 4-8 hours."
+    else:
+        summary += "Continue normal monitoring protocols."
     
     return {
-        "summary": f"Plant status is {status}. Average health: {avg_health:.1f}%. {high_risk} units require immediate attention.",
-        "ai_powered": False
+        "summary": summary,
+        "ai_powered": False,
+        "worst_stage": worst_stage
     }
 
 # ==============================================================================
@@ -1231,4 +1274,9 @@ async def websocket_stats():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="10.3.0.19", port=8000)
+    uvicorn.run(
+        app,
+        host="10.3.0.19",
+        port=8000,
+        reload=False
+    )

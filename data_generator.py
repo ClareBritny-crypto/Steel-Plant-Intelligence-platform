@@ -472,6 +472,40 @@ def generate_plant_data(num_hours=24):
             
             equip_id_counter += 1
     
+    # FORCE 2-3 equipment to be CRITICAL (>0.8 failure probability) across different stages
+    # This ensures we always have critical alerts and red equipment
+    critical_targets = []
+    
+    # Select 1 equipment from continuous-casting (most critical stage)
+    casting_equip = [e for e in equipment_list if e["stage_id"] == "continuous-casting"]
+    if casting_equip:
+        critical_targets.append(random.choice(casting_equip))
+    
+    # Select 1 equipment from secondary-metallurgy
+    metallurgy_equip = [e for e in equipment_list if e["stage_id"] == "secondary-metallurgy"]
+    if metallurgy_equip:
+        critical_targets.append(random.choice(metallurgy_equip))
+    
+    # Select 1 equipment from melt-shop
+    melt_equip = [e for e in equipment_list if e["stage_id"] == "melt-shop"]
+    if melt_equip:
+        critical_targets.append(random.choice(melt_equip))
+    
+    # Make these equipment CRITICAL
+    for equip in critical_targets:
+        # Set very high failure probability
+        critical_prob = random.uniform(0.82, 0.95)
+        equip["failure_probability"] = critical_prob
+        equip["health_score"] = int((1 - critical_prob) * 100)
+        equip["status"] = "red"
+        equip["risk_category"] = "high"
+        
+        # Update readings to reflect critical state
+        equip["readings"]["clogging_index"] = random.uniform(85, 98)
+        equip["readings"]["wear_pct"] = random.uniform(75, 95)
+        equip["readings"]["erosion_pct"] = random.uniform(70, 92)
+        equip["readings"]["refractory_mm"] = random.uniform(35, 55)
+    
     # Generate maintenance history
     maintenance_history = generate_maintenance_history(equipment_list, days_back=30)
     
