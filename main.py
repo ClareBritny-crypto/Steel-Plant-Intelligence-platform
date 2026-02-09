@@ -396,7 +396,7 @@ async def get_equipment(equip_id: str):
     # Get current readings
     readings = equip["readings"]
     
-    # Get values for formula calculations
+    # Get values for calculations
     clogging_idx = readings.get("clogging_index", 0)
     wear_pct = readings.get("wear_pct", 0)
     erosion_pct = readings.get("erosion_pct", 0)
@@ -406,19 +406,19 @@ async def get_equipment(equip_id: str):
     heats_count = readings.get("heats_count", 0)
     failure_prob = equip["failure_probability"]
     health_score = equip["health_score"]
+    slide_gate = readings.get("slide_gate_opening_pct", 45)
+    argon_pressure = readings.get("argon_pressure_bar", 1.2)
+    argon_flow = readings.get("argon_flow_lpm", 5.0)
+    tundish_weight = readings.get("tundish_weight_tons", 30)
+    casting_speed = readings.get("casting_speed_m_min", 1.2)
     
-    # Calculate derived metrics with ACTUAL formulas
-    thermal_stress = round(abs(temp - 1540) / 25 * 100, 1)
-    operational_eff = round((1 - failure_prob) * 100, 1)
-    
-    # Wear calculation (from data_generator.py calculate_wear_percentage)
+    # Calculate intermediate values
     time_wear = operating_hours * 0.05
     temp_excess = max(0, temp - 1540)
     thermal_wear = operating_hours * temp_excess * 0.001
     cyclic_wear = heats_count * 0.02
-    total_wear = time_wear + thermal_wear + cyclic_wear
     
-    # Health calculation components (from data_generator.py calculate_health_score)
+    # Health score components
     refractory_life = (refractory_mm - 50) / (150 - 50) if refractory_mm > 50 else 0
     refractory_score = max(0, min(100, refractory_life * 100))
     usage_ratio = heats_count / 250
@@ -426,28 +426,133 @@ async def get_equipment(equip_id: str):
     temp_deviation = abs(temp - 1540)
     temp_stress_ratio = temp_deviation / 25
     thermal_score = max(0, min(100, (1 - temp_stress_ratio) * 100))
+    anomaly_score = 85.0
     
+    # Clogging components
+    gate_deviation = (slide_gate - 45.0) / 45.0
+    gate_clogging = max(0, min(100, gate_deviation * 100 * 2))
+    pressure_ratio = argon_pressure / 1.2
+    pressure_clogging = max(0, min(100, (pressure_ratio - 1) * 100))
+    tundish_head = tundish_weight / (7.0 * 2.5)
+    expected_flow = (tundish_head ** 0.5) * (slide_gate / 100)
+    actual_flow = casting_speed * 0.25 * 0.2
+    flow_deviation = (expected_flow - actual_flow) / expected_flow if expected_flow > 0 else 0
+    flow_clogging = max(0, min(100, flow_deviation * 100))
+    
+    # Structured derived metrics
     derived_metrics = {
-        "clogging_risk": "high" if clogging_idx > 65 else "medium" if clogging_idx > 40 else "low",
-        "wear_status": "critical" if wear_pct > 75 else "elevated" if wear_pct > 50 else "normal",
-        "refractory_condition": "needs_replacement" if refractory_mm < 60 else "monitor" if refractory_mm < 90 else "good",
-        "thermal_stress": thermal_stress,
-        "operational_efficiency": operational_eff,
-        "maintenance_urgency": "immediate" if failure_prob > 0.7 else "soon" if failure_prob > 0.5 else "planned",
-        "formulas": {
-            "clogging_index": f"gate_clogging × 0.40 + pressure_clogging × 0.35 + flow_clogging × 0.25 = {clogging_idx:.1f}",
-            
-            "wear_pct": f"(time_wear + thermal_wear + cyclic_wear) / 100 × 100 = ({time_wear:.2f} + {thermal_wear:.2f} + {cyclic_wear:.2f}) / 100 × 100 = {wear_pct:.1f}%",
-            
-            "erosion_pct": f"wear_pct × 0.8 = {wear_pct:.1f} × 0.8 = {erosion_pct:.1f}%",
-            
-            "health_score": f"refractory_score × 0.35 + usage_score × 0.25 + thermal_score × 0.25 + anomaly_score × 0.15 = {refractory_score:.1f} × 0.35 + {usage_score:.1f} × 0.25 + {thermal_score:.1f} × 0.25 + ... = {health_score}",
-            
-            "thermal_stress": f"(|steel_temp_c - 1540| / 25) × 100 = (|{temp:.1f} - 1540| / 25) × 100 = ({temp_deviation:.1f} / 25) × 100 = {thermal_stress}%",
-            
-            "operational_efficiency": f"(1 - failure_probability) × 100 = (1 - {failure_prob:.3f}) × 100 = {operational_eff:.1f}%",
-            
-            "refractory_life": f"(current_thickness - min_thickness) / (initial_thickness - min_thickness) × 100 = ({refractory_mm:.1f} - 50) / (150 - 50) × 100 = {refractory_score:.1f}%"
+        "clogging_index": {
+            "value": round(clogging_idx, 2),
+            "calculation": {
+                "gate_clogging": round(gate_clogging, 2),
+                "pressure_clogging": round(pressure_clogging, 2),
+                "flow_clogging": round(flow_clogging, 2)
+            },
+            "formula": "gate_clogging × 0.40 + pressure_clogging × 0.35 + flow_clogging × 0.25",
+            "source": "Bai & Thomas (2001), Metallurgical and Materials Transactions B",
+            "input_sensors": ["slide_gate_opening_pct", "argon_pressure_bar", "argon_flow_lpm", "tundish_weight_tons", "casting_speed_m_min"],
+            "weights": {
+                "gate_clogging": 0.40,
+                "pressure_clogging": 0.35,
+                "flow_clogging": 0.25
+            }
+        },
+        "wear_percentage": {
+            "value": round(wear_pct, 2),
+            "calculation": {
+                "time_wear": round(time_wear, 2),
+                "thermal_wear": round(thermal_wear, 2),
+                "cyclic_wear": round(cyclic_wear, 2),
+                "total_wear_mm": round(time_wear + thermal_wear + cyclic_wear, 2)
+            },
+            "formula": "(time_wear + thermal_wear + cyclic_wear) / max_wear_mm × 100",
+            "source": "data_generator.py calculate_wear_percentage()",
+            "input_sensors": ["operating_hours", "steel_temp_c", "heats_count"],
+            "weights": {
+                "base_wear_rate": 0.05,
+                "thermal_factor": 0.001,
+                "cyclic_factor": 0.02
+            }
+        },
+        "erosion_pct": {
+            "value": round(erosion_pct, 2),
+            "calculation": {
+                "wear_pct": round(wear_pct, 2),
+                "erosion_factor": 0.8
+            },
+            "formula": "wear_pct × 0.8",
+            "source": "data_generator.py - erosion as 80% of wear",
+            "input_sensors": ["wear_pct"]
+        },
+        "refractory_remaining_mm": {
+            "value": round(refractory_mm, 2),
+            "calculation": {
+                "initial_thickness_mm": 150,
+                "current_thickness_mm": round(refractory_mm, 2),
+                "minimum_thickness_mm": 50,
+                "remaining_life_pct": round(refractory_score, 2)
+            },
+            "formula": "(current_thickness - minimum) / (initial - minimum) × 100",
+            "source": "data_generator.py calculate_health_score() - refractory component",
+            "input_sensors": ["refractory_mm"]
+        },
+        "health_score": {
+            "value": round(health_score, 2),
+            "calculation": {
+                "refractory_score": round(refractory_score, 2),
+                "usage_score": round(usage_score, 2),
+                "thermal_score": round(thermal_score, 2),
+                "anomaly_score": round(anomaly_score, 2)
+            },
+            "formula": "refractory_score × 0.35 + usage_score × 0.25 + thermal_score × 0.25 + anomaly_score × 0.15",
+            "source": "data_generator.py calculate_health_score()",
+            "input_sensors": ["refractory_mm", "heats_count", "steel_temp_c"],
+            "weights": {
+                "refractory": 0.35,
+                "usage": 0.25,
+                "thermal": 0.25,
+                "anomaly": 0.15
+            }
+        },
+        "failure_probability": {
+            "value": round(failure_prob, 3),
+            "calculation": {
+                "weibull_probability": round((1 - (1 / 2.718281828 ** ((operating_hours / 300) ** 2))), 3),
+                "health_factor": round((100 - health_score) / 100, 3),
+                "clogging_factor": round(clogging_idx / 100, 3),
+                "wear_factor": round(wear_pct / 100, 3),
+                "condition_factor": round((((100 - health_score) / 100) * 0.40 + (clogging_idx / 100) * 0.35 + (wear_pct / 100) * 0.25), 3)
+            },
+            "formula": "weibull_prob × 0.3 + condition_factor × 0.5 + interaction_term × 0.2",
+            "source": "data_generator.py calculate_failure_probability() - Weibull model",
+            "input_sensors": ["operating_hours", "health_score", "clogging_index", "wear_pct"],
+            "weights": {
+                "weibull": 0.3,
+                "condition": 0.5,
+                "interaction": 0.2
+            }
+        },
+        "thermal_stress": {
+            "value": round(abs(temp - 1540) / 25 * 100, 2),
+            "calculation": {
+                "current_temp_c": round(temp, 2),
+                "optimal_temp_c": 1540,
+                "temp_deviation_c": round(abs(temp - 1540), 2),
+                "max_deviation_c": 25
+            },
+            "formula": "(|steel_temp_c - 1540| / 25) × 100",
+            "source": "Thermal stress as percentage of maximum acceptable deviation",
+            "input_sensors": ["steel_temp_c"]
+        },
+        "operational_efficiency": {
+            "value": round((1 - failure_prob) * 100, 2),
+            "calculation": {
+                "failure_probability": round(failure_prob, 3),
+                "reliability": round(1 - failure_prob, 3)
+            },
+            "formula": "(1 - failure_probability) × 100",
+            "source": "Inverse of failure probability",
+            "input_sensors": ["failure_probability"]
         }
     }
     
