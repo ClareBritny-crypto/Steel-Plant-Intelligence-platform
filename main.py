@@ -205,10 +205,14 @@ async def get_plant_overview():
     equipment = PLANT_DATA["equipment"]
     total_equip = len(equipment)
     
+    # Risk categorization
+    high_risk_count = len([e for e in equipment if e["risk_category"] == "high"])
+    medium_risk_count = len([e for e in equipment if e["risk_category"] == "medium"])
+    low_risk_count = len([e for e in equipment if e["risk_category"] == "low"])
+    
     # KPI Calculations
     avg_health = sum(e["health_score"] for e in equipment) / total_equip
     avg_failure = sum(e["failure_probability"] for e in equipment) / total_equip
-    high_risk_count = len([e for e in equipment if e["risk_category"] == "high"])
     
     # Production calculations
     base_rate = 300
@@ -218,31 +222,49 @@ async def get_plant_overview():
     production_rate = round(base_rate * health_factor * risk_penalty * jitter, 1)
     heats_today = int(production_rate / 15.5)
     
-    # Critical alerts
+    # Active alerts
+    active_alert_count = len([a for a in ALERTS if not a.get("acknowledged", False)])
+    
+    # Critical alerts (for critical_alerts array)
     critical_alerts = [
         a for a in ALERTS 
         if a["severity"] in ["high", "critical"] and not a.get("acknowledged", False)
     ][:5]
     
-    # Stages summary
+    # Stages summary with proper status
     stages_summary = []
     for stage in STAGES:
         stage_equip = [e for e in equipment if e["stage_id"] == stage["id"]]
         if stage_equip:
             s_high = len([e for e in stage_equip if e["risk_category"] == "high"])
+            s_medium = len([e for e in stage_equip if e["risk_category"] == "medium"])
+            s_avg_health = sum(e["health_score"] for e in stage_equip) / len(stage_equip)
+            s_avg_failure = sum(e["failure_probability"] for e in stage_equip) / len(stage_equip)
+            
+            # Determine status based on high risk count
+            if s_high > 0:
+                status = "red"
+            elif s_medium > 1:
+                status = "yellow"
+            else:
+                status = "green"
+            
             stages_summary.append({
                 "stage_id": stage["id"],
                 "name": stage["name"],
                 "order": stage["order"],
-                "status": "red" if s_high > 0 else "green",
+                "status": status,
                 "equipment_count": len(stage_equip),
-                "high_risk_count": s_high
+                "high_risk_count": s_high,
+                "avg_failure_probability": round(s_avg_failure, 3),
+                "avg_health_score": round(s_avg_health, 1)
             })
     
     return {
         "plant_name": "Steel Plant Intelligence Platform",
         "timestamp": datetime.now().isoformat(),
         "kpis": {
+            "active_alerts": active_alert_count,
             "oee": round(avg_health * 0.82, 1),
             "yield_pct": 94.2,
             "uptime_pct": 98.1,
@@ -251,7 +273,9 @@ async def get_plant_overview():
             "avg_health_score": round(avg_health, 1),
             "avg_failure_probability": round(avg_failure * 100, 1),
             "total_equipment": total_equip,
-            "active_alerts": len([a for a in ALERTS if not a.get("acknowledged", False)]),
+            "high_risk_equipment": high_risk_count,
+            "medium_risk_count": medium_risk_count,
+            "low_risk_count": low_risk_count,
             "kpi_formulas": {
                 "oee": "Availability x Performance x Quality",
                 "yield": "Yield percentage",
@@ -263,13 +287,13 @@ async def get_plant_overview():
             "avg_failure_probability": round(avg_failure, 3),
             "avg_health_score": round(avg_health, 1),
             "high_risk_count": high_risk_count,
-            "medium_risk_count": len([e for e in equipment if e["risk_category"] == "medium"]),
-            "low_risk_count": len([e for e in equipment if e["risk_category"] == "low"]),
+            "medium_risk_count": medium_risk_count,
+            "low_risk_count": low_risk_count,
             "total_equipment": total_equip,
             "operational_rate": round(100 - (high_risk_count / total_equip * 100), 1)
         },
         "top_risk_factors": [
-            {"factor": "clogging_index", "display_name": "Clogging Index", "affected_equipment": 3, "avg_impact": 0.24}
+            {"factor": "clogging_index", "display_name": "Clogging Index", "affected_equipment": high_risk_count, "avg_impact": 0.24}
         ],
         "critical_equipment": sorted([
             {
@@ -281,10 +305,10 @@ async def get_plant_overview():
             for e in equipment
         ], key=lambda x: x["failure_probability"], reverse=True)[:5],
         "stages_summary": sorted(stages_summary, key=lambda x: x["order"]),
-        "active_alerts": len([a for a in ALERTS if not a.get("acknowledged", False)]),
+        "active_alerts": active_alert_count,
         "critical_alerts": critical_alerts
     }
-
+    
 @app.get("/api/stages")
 async def get_stages():
     equipment = PLANT_DATA["equipment"]
@@ -292,20 +316,39 @@ async def get_stages():
     for s in STAGES:
         stage_equip = [e for e in equipment if e["stage_id"] == s["id"]]
         
-        # Calculate average health for this stage
-        avg_health = 0
         if stage_equip:
+            # Calculate metrics
+            high_risk = len([e for e in stage_equip if e["risk_category"] == "high"])
+            medium_risk = len([e for e in stage_equip if e["risk_category"] == "medium"])
             avg_health = sum(e["health_score"] for e in stage_equip) / len(stage_equip)
+            avg_failure = sum(e["failure_probability"] for e in stage_equip) / len(stage_equip)
+            
+            # Determine status
+            if high_risk > 0:
+                status = "red"
+            elif medium_risk > 1:
+                status = "yellow"
+            else:
+                status = "green"
+        else:
+            high_risk = 0
+            avg_health = 100.0
+            avg_failure = 0.0
+            status = "green"
         
         res.append({
             "stage_id": s["id"],
             "name": s["name"],
             "order": s["order"],
+            "status": status,
             "equipment_count": len(stage_equip),
-            "high_risk_count": len([e for e in stage_equip if e["risk_category"] == "high"]),
+            "high_risk_count": high_risk,
+            "avg_failure_probability": round(avg_failure, 3),
             "avg_health_score": round(avg_health, 1)
         })
+    
     return {"stages": sorted(res, key=lambda x: x["order"])}
+
 
 @app.get("/api/stage/{stage_id}")
 async def get_stage_details(stage_id: str):
@@ -351,6 +394,19 @@ async def get_equipment(equip_id: str):
     if not equip:
         raise HTTPException(status_code=404, detail="Equipment not found")
     
+    # Get current readings
+    readings = equip["readings"]
+    
+    # Calculate derived metrics
+    derived_metrics = {
+        "clogging_risk": "high" if readings.get("clogging_index", 0) > 65 else "medium" if readings.get("clogging_index", 0) > 40 else "low",
+        "wear_status": "critical" if readings.get("wear_pct", 0) > 75 else "elevated" if readings.get("wear_pct", 0) > 50 else "normal",
+        "refractory_condition": "needs_replacement" if readings.get("refractory_mm", 150) < 60 else "monitor" if readings.get("refractory_mm", 150) < 90 else "good",
+        "thermal_stress": round(abs(readings.get("steel_temp_c", 1540) - 1540) / 25 * 100, 1),
+        "operational_efficiency": round((1 - equip["failure_probability"]) * 100, 1),
+        "maintenance_urgency": "immediate" if equip["failure_probability"] > 0.7 else "soon" if equip["failure_probability"] > 0.5 else "planned"
+    }
+    
     return {
         "equip_id": equip["equip_id"],
         "type": equip["type"],
@@ -372,22 +428,24 @@ async def get_equipment(equip_id: str):
             "predicted_remaining_heats": max(0, int((1 - equip["failure_probability"]) * 50)),
             "predicted_remaining_hours": max(0, int((1 - equip["failure_probability"]) * 200))
         },
-        "live_sensors": equip["readings"],
-        "current_readings": equip["readings"],
+        "derived_metrics": derived_metrics,
+        "live_sensors": readings,
+        "current_readings": readings,
         "sensors": [
             {
                 "sensor_id": s_id,
                 "name": s_data["display_name"],
                 "value": s_data["current_value"],
                 "unit": s_data["unit"],
-                "status": "normal" if s_data["current_value"] < s_data["thresholds"]["warning"] else "warning",
+                "status": "alarm" if s_data["current_value"] > s_data["thresholds"]["alarm"] else 
+                         "warning" if s_data["current_value"] > s_data["thresholds"]["warning"] else "normal",
                 "is_derived": s_data.get("is_derived", False)
             }
             for s_id, s_data in PLANT_DATA["sensors"].items()
             if s_data["equipment_id"] == equip_id
         ]
     }
-
+    
 @app.get("/api/equipment/{equip_id}/explanation")
 async def get_explanation(equip_id: str, use_ai: bool = True):
     equip = next((e for e in PLANT_DATA["equipment"] if e["equip_id"] == equip_id), None)
